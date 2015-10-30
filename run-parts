@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+
+# run-parts - concept taken from Debian
+# http://www.unix.com/man-page/linux/8/run-parts/
+
+# keep going when something fails
+set +e
+# pipefail is required for --report support
+set -o pipefail
+
+usage() {
+    echo "run-parts  [--test]  [--verbose]  [--report]  [--umask=umask]
+           [--arg=argument] [--exit-on-error] [--help] [--list] [--reverse]  [--]  DIRECTORY"
+}
+
+help() {
+    echo "
+NAME
+       run-parts - run scripts or programs in a directory
+
+SYNOPSIS
+       run-parts  [--test]  [--verbose]  [--report]  [--umask=umask]
+       [--arg=argument] [--exit-on-error] [--help] [--list] [--reverse]  [--]  DIRECTORY
+
+DESCRIPTION
+       run-parts runs all the executable files named within constraints described below, found in
+       directory directory.  Other files and directories are silently ignored.
+
+       Files  are  run	in  the  lexical sort order of their names unless the --reverse option is
+       given, in which case they are run in the opposite order.
+
+OPTIONS
+       --test print the names of the scripts which would be run, but don't actually run them.
+
+       --list print the names of the all matching files (not limited to executables),  but  don't
+          actually run them. This option cannot be used with --test.
+
+       -v, --verbose
+          print the name of each script to stderr before running.
+
+       --report
+          similar  to  --verbose,  but  only prints the name of scripts which produce output.
+          The script's name is printed to whichever of stdout or stderr the script produces
+          output on. The script's name is not printed to stderr if --verbose also specified.
+
+       --reverse
+          reverse the scripts' execution order.
+
+       --exit-on-error
+          exit as soon as a script returns with a non-zero exit code.
+
+       --umask=umask
+          sets  the  umask to umask before running the scripts.  umask should be specified in
+          octal.  By default the umask is set to 022.
+
+       -a, --arg=argument
+          pass argument to the scripts.  Use --arg once for each argument you want passed.
+
+       --     specifies that this is the end of the options.  Any filename after -- will  be  not
+          be interpreted as an option even if it starts with a hyphen.
+
+       -h, --help
+          display usage information and exit.
+"
+}
+
+report-and-pipe() {
+    rline="$1"
+    while IFS= read -r line; do
+        echo -en "$rline" ; echo "$line";
+        unset rline;
+    done;
+}
+
+if [ $# -lt 1 ]; then
+    usage
+    exit 1
+fi
+
+args=""
+dir=""
+umask=""
+
+for i in "$@"; do
+    if [ ${append_arg:-0} = 1 ]; then
+        args="$args $i"
+        append_arg=0
+        continue
+    fi
+    case $i in
+        --list)
+            list=1
+            ;;
+        --test)
+            test=1
+            ;;
+        --verbose|-v)
+            verbose=1
+            ;;
+        --report)
+            report=1
+            ;;
+        --reverse)
+            reverse=1
+            ;;
+        --arg=*)
+            args="$args ${i#*=}"
+            ;;
+        -a)
+            append_arg=1
+            ;;
+        --umask=*)
+            umask="${i#*=}"
+            ;;
+        --help|-h)
+            help
+            exit 0
+            ;;
+        --exit-on-error)
+            exit_on_error=1
+            ;;
+        --)
+            # -- end of options
+            ;;
+        -*)
+            echo Unknown argument: $i > /dev/stderr
+            echo Rest of arguments: $* > /dev/stderr
+            usage
+            exit 1
+            ;;
+        *)
+            # directory
+            dir=$i
+            break
+            ;;
+    esac
+done
+
+if [[ "x$dir" = "x" && ! -d "$dir" ]]; then
+    echo "Not a directory: '$dir'"
+    usage
+    exit 1
+fi
+
+# Ignore *~ and *, scripts
+filelist=$(LC_ALL=C; echo ${dir%/}/*[^~,])
+
+if [ ${reverse:-0} = 1 ]; then
+    filelist=$(echo $filelist | xargs -n 1 | sort -r)
+fi
+
+for i in $filelist ; do
+    [ -d $i ] && continue
+    # Don't run *.{disabled,rpmsave,rpmorig,rpmnew,swp,cfsaved} scripts
+    [ "${i%.disabled}" != "${i}" ] && continue
+    [ "${i%.cfsaved}" != "${i}" ] && continue
+    [ "${i%.rpmsave}" != "${i}" ] && continue
+    [ "${i%.rpmorig}" != "${i}" ] && continue
+    [ "${i%.rpmnew}" != "${i}" ] && continue
+    [ "${i%.swp}" != "${i}" ] && continue
+    [ "${i%,v}" != "${i}" ] && continue
+
+    if [ -e $i ]; then
+        if [ -r $dir/whitelist ]; then
+            grep -q "^$(basename $i)$" $dir/whitelist && continue
+        fi
+
+        if [ ${list:-0} = 1 ]; then
+            echo $i $args;
+            continue
+        fi
+
+        if [ -x $i ]; then
+            if [ ${test:-0} = 1 ]; then
+                echo $i $args;
+                continue
+            fi
+            if [ "$RANDOMIZE" != "" ]; then
+                let "rtime = $RANDOM"
+                if [ "$RANDOMTIME" != "" ]; then
+                    let "rtime %= $RANDOMTIME"
+                else
+                    let "rtime %= 300"
+                fi
+                sleep $rtime
+            fi
+
+            # run executable files
+            if [ ${verbose:-0} = 1 ]; then
+                echo $i $args > /dev/stderr
+            fi
+
+            if [ "x$umask" != "x" ]; then
+                umask $umask
+            fi
+
+            if [ ${report:-0} = 1 ]; then
+                oline="$i\n"
+                # do not report script name over stderr in verbose mode
+                # no duplicates are needed
+                if [ ${verbose:-0} = 1 ]; then
+                    eline=""
+                else
+                    eline="$i\n"
+                fi
+                { $i $args 2>&1 1>&3 3>&- |
+                    # handle stderr redirected to stdout
+                    report-and-pipe "$eline"
+                } 3>&1 1>&2 |
+                    # handle stdout
+                    report-and-pipe "$oline"
+            else
+                $i $args
+            fi
+
+            rc=${PIPESTATUS[0]}
+
+            if [ ${verbose:-0} = 1 ]; then
+                echo $i $args exit status $rc > /dev/stderr
+            fi
+
+            if [ ${rc:-0} != 0 ]; then
+                if [ ${exit_on_error:-0} = 1 ]; then
+                    exit $rc
+                fi
+            fi
+        fi
+    fi
+done
+
+exit 0

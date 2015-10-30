@@ -1,0 +1,4 @@
+#!/bin/sh
+
+echo 01-stdout-1
+echo 01-stdout-2
