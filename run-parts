@@ -2,6 +2,8 @@
 
 # run-parts - concept taken from Debian
 # http://www.unix.com/man-page/linux/8/run-parts/
+# with extensions from Ubuntu
+# http://manpages.ubuntu.com/manpages/trusty/man8/run-parts.8.html
 
 # keep going when something fails
 set +e
@@ -9,7 +11,7 @@ set +e
 set -o pipefail
 
 usage() {
-    echo "run-parts  [--test]  [--verbose]  [--report]  [--umask=umask]
+    echo "run-parts  [--test]  [--verbose]  [--report]  [--umask=umask] [--lsbsysinit] [--regex=REGEX]
            [--arg=argument] [--exit-on-error] [--help] [--list] [--reverse]  [--]  DIRECTORY"
 }
 
@@ -19,12 +21,25 @@ NAME
        run-parts - run scripts or programs in a directory
 
 SYNOPSIS
-       run-parts  [--test]  [--verbose]  [--report]  [--umask=umask]
+       run-parts  [--test]  [--verbose]  [--report]  [--umask=umask] [--lsbsysinit] [--regex=REGEX]
        [--arg=argument] [--exit-on-error] [--help] [--list] [--reverse]  [--]  DIRECTORY
 
 DESCRIPTION
        run-parts runs all the executable files named within constraints described below, found in
        directory directory.  Other files and directories are silently ignored.
+
+       If neither the --lsbsysinit option nor the --regex option is given  then  the  names  must
+       consist  entirely of ASCII upper- and lower-case letters, ASCII digits, ASCII underscores,
+       and ASCII minus-hyphens.
+
+       If the --lsbsysinit option is given,  then  the  names  must  not  end  in  .dpkg-old   or
+       .dpkg-dist  or  .dpkg-new  or  .dpkg-tmp,  and must belong to one or more of the following
+       namespaces: the LANANA-assigned namespace (^[a-z0-9]+$); the LSB hierarchical and reserved
+       namespaces  (^_?([a-z0-9_.]+-)+[a-z0-9]+$);  and the Debian cron script namespace (^[a-zA-
+       Z0-9_-]+$).
+
+       If the --regex option  is  given,  the  names  must  match  the  custom  extended  regular
+       expression specified as that option's argument.
 
        Files  are  run	in  the  lexical sort order of their names unless the --reverse option is
        given, in which case they are run in the opposite order.
@@ -52,6 +67,13 @@ OPTIONS
        --umask=umask
           sets  the  umask to umask before running the scripts.  umask should be specified in
           octal.  By default the umask is set to 022.
+
+       --lsbsysinit
+          filename must be in one or more of either the LANANA-assigned namespace, the LSB
+          namespaces - either hierarchical or reserved - or the Debian cron script namespace.
+
+       --regex=REGEX
+          validate filenames against custom extended regular expression REGEX
 
        -a, --arg=argument
           pass argument to the scripts.  Use --arg once for each argument you want passed.
@@ -103,6 +125,12 @@ for i in "$@"; do
         --reverse)
             reverse=1
             ;;
+        --lsbsysinit)
+            lsbsysinit=1
+            ;;
+        --regex)
+            regex="${i#*=}"
+            ;;
         --arg=*)
             args="$args ${i#*=}"
             ;;
@@ -150,7 +178,8 @@ if [ ${reverse:-0} = 1 ]; then
 fi
 
 for i in $filelist ; do
-    [ -d $i ] && continue
+    [ -d "${i}" ] && continue
+    bname=$(basename "${i}")
     # Don't run *.{disabled,rpmsave,rpmorig,rpmnew,swp,cfsaved} scripts
     [ "${i%.disabled}" != "${i}" ] && continue
     [ "${i%.cfsaved}" != "${i}" ] && continue
@@ -160,9 +189,25 @@ for i in $filelist ; do
     [ "${i%.swp}" != "${i}" ] && continue
     [ "${i%,v}" != "${i}" ] && continue
 
-    if [ -e $i ]; then
+    if [ ${lsbsysinit:-0} = 1 ]; then
+        # Don't run *.{dpkg-old,dpkg-dist,dpkg-new,dpkg-tmp} scripts
+        [ "${i%.dpkg-old}" != "${i}" ] && continue
+        [ "${i%.dpkg-dist}" != "${i}" ] && continue
+        [ "${i%.dpkg-new}" != "${i}" ] && continue
+        [ "${i%.dpkg-tmp}" != "${i}" ] && continue
+        # Adhere to LANANA-assigned LSB (hierarchical and reserved) and the Debian cron script namespaces
+        [[ ! "${bname}" =~ ^[a-z0-9]+$ ]] && \
+        [[ ! "${bname}" =~ ^_?([a-z0-9_.]+-)+[a-z0-9]+$ ]] && \
+        [[ ! "${bname}" =~ ^[a-zA-Z0-9_-]+$ ]] && continue
+    fi
+
+    if [ "x$regex" != "x" ]; then
+        [[ ! "${bname}" =~ $regex ]] && continue
+    fi
+
+    if [ -e "${i}" ]; then
         if [ -r $dir/whitelist ]; then
-            grep -q "^$(basename $i)$" $dir/whitelist && continue
+            grep -q "^${bname}$" $dir/whitelist && continue
         fi
 
         if [ ${list:-0} = 1 ]; then
@@ -170,7 +215,7 @@ for i in $filelist ; do
             continue
         fi
 
-        if [ -x $i ]; then
+        if [ -x "${i}" ]; then
             if [ ${test:-0} = 1 ]; then
                 echo $i $args;
                 continue
@@ -210,7 +255,7 @@ for i in $filelist ; do
                     # handle stdout
                     report-and-pipe "$oline"
             else
-                $i $args
+                "${i}" $args
             fi
 
             rc=${PIPESTATUS[0]}
