@@ -1,0 +1,4 @@
+#!/bin/sh
+
+echo 04 non-lsb-1
+echo 04 non-lsb-2
