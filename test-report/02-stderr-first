@@ -1,4 +1,5 @@
 #!/bin/sh
 
 echo 02-stderr-first-1 1>&2
+sleep 1
 echo 02-stderr-first-2
