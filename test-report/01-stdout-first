@@ -1,5 +1,0 @@
-#!/bin/sh
-
-echo 01-stdout-first-1
-sleep 1
-echo 01-stdout-first-2 1>&2

@@ -1,4 +1,0 @@
-#!/bin/sh
-
-echo 02-stderr-1 1>&2
-echo 02-stderr-2 1>&2
