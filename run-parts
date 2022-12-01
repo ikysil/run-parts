@@ -273,4 +273,4 @@ echo "$filelist" | while read bname ; do
     fi
 done
 
-exit 0
+exit ${?}
